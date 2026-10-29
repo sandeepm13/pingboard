@@ -1,0 +1,26 @@
+# Laptop override: the full app in Docker on http://localhost:3000, using the
+# `pingboard_local` database. Settings come from your .env.dev (or set
+# ENV_FILE=.env.local inside .env.local and pass that file instead).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml -p pingboard-local --env-file .env.dev up -d --build
+#
+# Values here win over docker-compose.yml and the env file.
+
+services:
+  web:
+    build:
+      args:
+        APP_URL: http://localhost:3000
+    environment:
+      APP_URL: http://localhost:3000
+      AUTH_URL: http://localhost:3000
+      MONGODB_DB: pingboard_local
+    # !override replaces the main file's port list instead of adding to it.
+    # 127.0.0.1 = reachable from this laptop only, not from your network.
+    ports: !override
+      - "127.0.0.1:3000:3000"
+
+  worker:
+    environment:
+      APP_URL: http://localhost:3000
+      MONGODB_DB: pingboard_local

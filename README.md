@@ -97,9 +97,10 @@ npm run services:up           # MongoDB + Redis in Docker (docker compose)
 npm run dev:all               # web on http://localhost:3000 + the worker
 ```
 
-`docker compose` (`docker-compose.yml`) currently runs **MongoDB and Redis
+`npm run services:up` (`docker-compose.services.yml`) runs **MongoDB and Redis
 only**, bound to 127.0.0.1. The web app and the worker run on your machine
-with `npm`. Containers for those two come with the deploy stage.
+with `npm`. To run the whole app in Docker (or deploy it), see
+[DEPLOYMENT.md](DEPLOYMENT.md).
 `npm run services:down` stops the containers; your data stays in Docker volumes.
 
 With the compose services, your `.env` needs at least:
