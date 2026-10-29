@@ -2,7 +2,7 @@
 
 Update after every stage. A stage is done only when it meets the Definition of Done in `CLAUDE.md` (lint + build pass, works in the browser, this file updated).
 
-Current stage: **9 — Quality pass (done and verified on an isolated stack; waiting for your OK)**. Stages 3, 5, 6, 7 and 8 are also still waiting for your OK. Stages 3 and 4 were built by two sessions in the same tree at the same time (see Known issues).
+Current stage: **10 — Deploy with Docker + CI/CD (files written, not run yet; see DEPLOYMENT.md)**. Stage 9 — Quality pass is done and verified on an isolated stack, waiting for your OK. Stages 3, 5, 6, 7 and 8 are also still waiting for your OK. Stages 3 and 4 were built by two sessions in the same tree at the same time (see Known issues).
 
 ## Stages
 
@@ -135,10 +135,18 @@ Current stage: **9 — Quality pass (done and verified on an isolated stack; wai
   - [x] Clean-up: dead code removed (`ComingSoon`, `CheckerEventBus`), unused env vars removed from `.env.example`, no `console.log`, lint/typecheck clean
   - [x] README.md
   - [x] `npm run lint`, `typecheck`, `test`, `build`, `build:worker` pass
-- [ ] **10. Deploy with Docker**
-  - [ ] Production Dockerfiles (web + worker), multi-stage, non-root
-  - [ ] docker-compose (web, worker, mongo, redis) with healthchecks
-  - [ ] Production env checklist, backups note, deploy docs
+- [ ] **10. Deploy with Docker + CI/CD** — all files written; **nothing built, run or deployed yet** (files-only, at your request). Ticked = file exists and was re-read against the rules.
+  - [x] Production Dockerfiles (web + worker), multi-stage, `node:24-alpine`, non-root, healthchecks; allow-list `.dockerignore` files (no `.env*`)
+  - [x] `output: "standalone"` in `next.config.ts`, `GET /api/health` (200 / 503), `.nvmrc` = 24
+  - [x] `docker-compose.yml` (web + worker + redis) for any one environment: env file + `-p pingboard-<env>`, no `container_name`/fixed names, one worker, healthchecks, `depends_on: service_healthy`, log rotation, CPU/memory limits
+  - [x] `docker-compose.local.yml` (laptop, `localhost:3000`, `pingboard_local`); old Mongo + Redis file moved to `docker-compose.services.yml`, `services:*` scripts updated
+  - [x] `.github/workflows/ci.yml` (PRs to dev/uat/main: lint, typecheck, test, build both images on `ubuntu-latest`)
+  - [x] `.github/workflows/deploy.yml` (push to dev/uat/main on the self-hosted runner: secret check, env file, compose up, health wait, logs on failure, keep 3 images)
+  - [x] `DEPLOYMENT.md` (VM + runner setup, Atlas, secrets list, operations, rollback), `.env.example` updated
+  - [ ] `npm run lint`, `typecheck`, `build`, `build:worker` after these changes
+  - [ ] Images built and started on the laptop (`docker-compose.local.yml`)
+  - [ ] VM + runner set up; first deploy to dev → uat → prod; `/api/health` 200 on 3200 / 3100 / 3000
+  - [ ] Graceful worker shutdown on a real SIGTERM (`docker stop pingboard-dev-worker-1`, look for the drain log line)
 
 ## Decisions
 
@@ -250,6 +258,17 @@ _Record each decision with date and reason. Pin exact dependency versions here i
 - 2026-10-27 — Stage 9: `/styleguide` is development-only (404 in production builds).
 - 2026-10-27 — Stage 9: Removed `CheckerEventBus` (`worker/src/events.ts`): nothing listened since Stage 6 moved incidents to the stored state. Status changes are still logged.
 
+- 2026-10-29 — Stage 10: **One VM, three environments** as separate compose projects from ONE `docker-compose.yml` + ONE `deploy.yml`: `main` → prod :3000, `uat` → uat :3100, `dev` → dev :3200. Per-environment differences come only from `/opt/pingboard/<env>/.env` and `-p pingboard-<env>`. MongoDB stays on Atlas (dev + uat share a cluster, prod has its own); each environment has its own Redis container + volume.
+- 2026-10-29 — Stage 10: **Deploys run on a GitHub self-hosted runner on the VM** (the VM isn't reachable from the internet): images are built on the VM, no SSH, no registry. Only pushes deploy; pull requests run CI on `ubuntu-latest`. OK only because the repo is private.
+- 2026-10-29 — Stage 10: **Secrets are repository secrets with `_DEV/_UAT/_PROD` suffixes** (no GitHub Environments on the free private plan), picked with `secrets[format('NAME_{0}', suffix)]` so a missing prod secret can never fall back to the dev one. Required: `MONGODB_URI`, `AUTH_SECRET` (the brief said `JWT_SECRET`; the app reads Auth.js's `AUTH_SECRET`, your call to keep that name), `ENCRYPTION_KEY`, `REDIS_PASSWORD`. Optional: Google/GitHub OAuth, `EMAIL_*`, `RESEND_API_KEY`, `SMTP_*`. Repository variable `VM_HOST` → `APP_URL = AUTH_URL = http://VM_HOST:<port>`.
+- 2026-10-29 — Stage 10: `APP_ENV` = dev | uat | prod; `NODE_ENV` is always `production` in containers. The app code doesn't read `APP_ENV` (no code change); it names the images/project and is passed as the build arg `NEXT_PUBLIC_APP_ENV`. Database name via the existing `MONGODB_DB` = `pingboard_<env>` (not part of the URI secret).
+- 2026-10-29 — Stage 10: **Image names per environment** (`pingboard-<env>-web:<sha>`, `pingboard-<env>-worker:<sha>`) instead of one `pingboard-web:<sha>`: `APP_URL` is baked into static pages at build time, so a dev web image isn't valid for prod, and dev/uat could otherwise share a SHA tag. Deploy keeps the 3 newest per environment for rollback.
+- 2026-10-29 — Stage 10: Env file values are written as `KEY='value'` (compose reads single-quoted values literally, so `$` in a password is safe); the workflow refuses values with `'` or a line break. Empty optional values are left out because the web env schema rejects `""` for optional keys.
+- 2026-10-29 — Stage 10: Containers get the whole env file via `env_file` (path in `ENV_FILE`, written into the file itself); compose then forces `NODE_ENV=production`, `SSRF_ALLOW_PRIVATE=false`, `REDIS_URL=redis://:<REDIS_PASSWORD>@redis:6379` and (worker) `WORKER_HEALTH_HOST=127.0.0.1`.
+- 2026-10-29 — Stage 10: Limits (assumed VM 4 CPU / 8 GB): prod web 1.5 CPU / 1 GB, worker 1 CPU / 512 MB; dev + uat web 0.75 / 768 MB, worker 0.5 / 384 MB, `cpu_shares` 256 vs prod 1024; Redis 0.5 CPU / 256 MB with `maxmemory 200mb noeviction`. `next build` during a deploy is not limited (can briefly slow prod).
+- 2026-10-29 — Stage 10: Base image `node:24-alpine` (floating minor, as asked; `NODE_IMAGE` build arg to pin an exact tag). Worker `stop_grace_period: 60s` (it drains for up to 45 s), `init: true`, `no-new-privileges`. Web image creates an empty `public/` because the repo has none yet.
+- 2026-10-29 — Stage 10: Old local Mongo + Redis compose file moved unchanged (header comment only) to `docker-compose.services.yml`; `npm run services:*` use `-f docker-compose.services.yml`.
+
 ## Known issues
 
 ### Final list (after Stage 9)
@@ -263,7 +282,7 @@ Open, in rough priority order. The per-stage notes further down are the history.
 3. **Email addresses aren't verified**, neither at password signup nor for email alert channels (anyone can add any address; test alerts are limited to 5/min, 50/day). Needed before public launch.
 4. **Graceful worker shutdown (SIGTERM) is untested.** Windows can't send SIGTERM; verify in Docker (Stage 10).
 5. **Single web instance assumed:** `use cache` is in-memory per process, and static pages bake `APP_URL` in at build time (Stage 10).
-6. `docker compose` runs MongoDB + Redis only; the web + worker images are Stage 10. Docker Desktop on this machine was stuck on an update dialog.
+6. Stage 10 Docker/CI files are written but **never built or run** (files-only request): Dockerfiles, compose files and workflows are unverified until the commands in DEPLOYMENT.md are run. On the VM (plain http on a LAN IP), Google sign-in and "Connect Google/GitHub" in Settings won't work until HTTPS (see DEPLOYMENT.md → Known limits).
 7. next-auth is a beta (`5.0.0-beta.32`); `unstable_update()` is used after onboarding and password changes.
 
 **Behaviour**

@@ -1,0 +1,21 @@
+# What the web image build (Dockerfile) may see. Allow-list: everything is
+# left out unless listed below, so a new file (or a real .env) can't slip in.
+# That already excludes .env*, node_modules, .git, .next, worker/, tests/,
+# e2e/, test-results/, logs, *.md and .env.example (the build doesn't need it).
+*
+
+!package.json
+!package-lock.json
+!.npmrc
+!next.config.ts
+!tsconfig.json
+!src
+!public
+
+# Never secrets or junk, even if one ends up inside src/ or public/.
+**/.env*
+**/*.pem
+**/*.key
+**/node_modules
+**/*.log
+**/*.md

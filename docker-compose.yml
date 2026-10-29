@@ -1,56 +1,135 @@
-# Local development services: MongoDB + Redis.
-# Credentials come from .env (see .env.example). Ports are bound to 127.0.0.1 only.
-# Production services (web + worker) are added in Stage 10.
+# PingBoard: web + worker + redis for ONE environment (dev, uat, prod, or your
+# laptop). MongoDB is not in here: every environment uses MongoDB Atlas.
+#
+# The same file runs every environment. The only things that differ are:
+#   1. the env file      --env-file /opt/pingboard/<env>/.env
+#   2. the project name  -p pingboard-<env>
+# Compose puts the project name in front of every container, network and volume
+# (pingboard-dev-web-1, pingboard-prod_redis-data…), so environments never share
+# anything. That's also why there is no `container_name:` and no fixed `name:`
+# on volumes or networks here: those would clash between environments.
+#
+# What .github/workflows/deploy.yml runs:
+#   docker compose -p pingboard-dev --env-file /opt/pingboard/dev/.env up -d --build
+# Laptop: docker-compose.local.yml. Mongo + Redis for `npm run dev`:
+# docker-compose.services.yml.
 
-name: pingboard
+# Fallback when -p is forgotten; -p always wins.
+name: pingboard-${APP_ENV:-local}
+
+# Shared settings, reused below with `<<: *app`.
+x-logging: &logging
+  driver: json-file
+  options:
+    # At most 3 files of 10 MB per container, so logs can't fill the disk.
+    max-size: "10m"
+    max-file: "3"
+
+x-app: &app
+  restart: unless-stopped
+  # A tiny init process forwards stop signals and cleans up child processes.
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  logging: *logging
+  # Every app setting comes from the env file. ENV_FILE is written into that
+  # same file by the deploy workflow, so it points at itself.
+  env_file:
+    - path: ${ENV_FILE:-.env.dev}
+      required: true
+  depends_on:
+    redis:
+      condition: service_healthy
+  # Lower = gets less CPU time when the VM is busy (prod 1024, dev/uat 256).
+  cpu_shares: ${CPU_SHARES:-1024}
 
 services:
-  mongo:
-    image: mongo:8
-    restart: unless-stopped
+  web:
+    <<: *app
+    # One image name per environment: APP_URL is baked in at build time, so a
+    # dev image can't be used for prod. Tag = commit SHA, for rollbacks.
+    image: pingboard-${APP_ENV:-local}-web:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_URL: ${APP_URL:?APP_URL is missing from the env file}
+        NEXT_PUBLIC_APP_ENV: ${APP_ENV:-local}
+    # These win over the env file.
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:?set MONGO_INITDB_ROOT_USERNAME in .env}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?set MONGO_INITDB_ROOT_PASSWORD in .env}
+      NODE_ENV: production
+      # The Redis container of this same project (service name = host name).
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is missing from the env file}@redis:6379
+      SSRF_ALLOW_PRIVATE: "false"
     ports:
-      # Host port defaults to 27018 so it doesn't clash with a locally installed MongoDB.
-      - "127.0.0.1:${MONGO_HOST_PORT:-27018}:27017"
-    volumes:
-      - mongo-data:/data/db
-    healthcheck:
-      test:
-        ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      # The only published port. VM port (3000 / 3100 / 3200) → container 3000.
+      - "${WEB_PORT:-3000}:3000"
+    deploy:
+      resources:
+        limits:
+          cpus: "${WEB_CPUS:-1.0}"
+          memory: ${WEB_MEMORY:-768m}
+
+  worker:
+    <<: *app
+    image: pingboard-${APP_ENV:-local}-worker:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    environment:
+      NODE_ENV: production
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is missing from the env file}@redis:6379
+      SSRF_ALLOW_PRIVATE: "false"
+      # Health server stays inside the container, where the image's
+      # HEALTHCHECK expects it.
+      WORKER_HEALTH_HOST: 127.0.0.1
+      WORKER_HEALTH_PORT: "3001"
+    # No ports: the worker only talks out (Redis, Atlas, the monitored URLs).
+    # The worker drains in-flight checks for up to 45 s on SIGTERM.
+    stop_grace_period: 60s
+    deploy:
+      # Exactly ONE worker per environment, or every URL is checked twice.
+      # Never `--scale worker=2`.
+      replicas: 1
+      resources:
+        limits:
+          cpus: "${WORKER_CPUS:-0.5}"
+          memory: ${WORKER_MEMORY:-384m}
 
   redis:
     image: redis:8-alpine
     restart: unless-stopped
-    # BullMQ requires maxmemory-policy=noeviction so queued jobs are never evicted.
+    logging: *logging
+    # BullMQ requires maxmemory-policy=noeviction so queued jobs are never
+    # evicted. maxmemory stays below the container's memory limit. The password
+    # is read from the environment by the shell, so it isn't in this file.
     command:
-      - redis-server
-      - --requirepass
-      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
-      - --appendonly
-      - "yes"
-      - --maxmemory-policy
-      - noeviction
-    ports:
-      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
+      - sh
+      - -c
+      - >-
+        exec redis-server
+        --requirepass "$$REDIS_PASSWORD"
+        --appendonly yes
+        --maxmemory 200mb
+        --maxmemory-policy noeviction
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is missing from the env file}
+      # redis-cli reads the password from here (healthcheck below).
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?REDIS_PASSWORD is missing from the env file}
+    # No ports: only web and worker (same project network) can reach it.
     volumes:
       - redis-data:/data
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep PONG',
-        ]
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
 
 volumes:
-  mongo-data:
+  # Becomes pingboard-<env>_redis-data: one per environment.
   redis-data:

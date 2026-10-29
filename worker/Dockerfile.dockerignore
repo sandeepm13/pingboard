@@ -1,0 +1,21 @@
+# What the worker image build (worker/Dockerfile) may see. Docker uses this
+# file instead of the root .dockerignore because it sits next to that
+# Dockerfile. Allow-list: everything else is left out.
+*
+
+!package.json
+!package-lock.json
+!.npmrc
+!src/lib/shared
+!worker/src
+!worker/tsconfig.json
+!worker/runtime-deps.mjs
+
+# Never secrets or junk.
+**/.env*
+**/*.pem
+**/*.key
+**/node_modules
+**/*.log
+**/*.md
+worker/dist
