@@ -1,0 +1,62 @@
+# ============================================================
+# Files NOT sent to Docker when building the WORKER image (worker/Dockerfile).
+# Docker picks this file up automatically because its name is
+# "<Dockerfile name>.dockerignore" next to that Dockerfile.
+# Patterns are relative to the repo root (the build context), not to worker/.
+# ============================================================
+
+# Installed packages: the image installs its own with npm ci
+**/node_modules
+
+# Build output: the image builds its own
+.next
+out
+build
+**/dist
+*.tsbuildinfo
+
+# Git history
+.git
+
+# Secrets: never send .env files to Docker...
+.env
+.env.*
+# ...but keep the empty template
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test output and test code
+coverage
+test-results
+playwright-report
+blob-report
+tests
+e2e
+scripts
+
+# Web-only code the worker never uses (it only needs src/lib/shared)
+src/app
+src/components
+src/actions
+
+# Docs (editing them shouldn't force a rebuild)
+*.md
+
+# Editor and tool folders
+.vscode
+.idea
+.claude
+
+# OS junk files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker files themselves
+Dockerfile
+.dockerignore
+worker/Dockerfile
+worker/Dockerfile.dockerignore

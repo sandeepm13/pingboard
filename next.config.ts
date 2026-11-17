@@ -37,6 +37,8 @@ const securityHeaders = [
 ]
 
 const nextConfig: NextConfig = {
+  // Docker: emits .next/standalone (server.js + only the traced node_modules).
+  output: "standalone",
   cacheComponents: true,
   partialPrefetching: true,
   poweredByHeader: false,

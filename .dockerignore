@@ -1,0 +1,58 @@
+# ============================================================
+# Files NOT sent to Docker when building the WEB image (Dockerfile at repo root).
+# Patterns are relative to the repo root (the build context).
+# ============================================================
+
+# Installed packages: the image installs its own with npm ci
+**/node_modules
+
+# Build output: the image builds its own
+.next
+out
+build
+**/dist
+*.tsbuildinfo
+
+# Git history
+.git
+
+# Secrets: never send .env files to Docker...
+.env
+.env.*
+# ...but keep the empty template
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test output and test code (not needed to build the web app)
+coverage
+test-results
+playwright-report
+blob-report
+tests
+e2e
+scripts
+vitest.config.mts
+playwright.config.ts
+
+# The worker has its own image (worker/Dockerfile)
+worker
+
+# Docs (editing them shouldn't force a rebuild)
+*.md
+
+# Editor and tool folders
+.vscode
+.idea
+.claude
+
+# OS junk files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker files themselves
+Dockerfile
+.dockerignore
